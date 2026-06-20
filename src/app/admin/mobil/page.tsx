@@ -1,7 +1,7 @@
 "use client";
 
 /* cspell:disable */
-import React, { useState, useEffect } from "react"; // Hapus useCallback karena sudah tidak dibutuhkan
+import React, { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import {
   Plus,
@@ -11,6 +11,8 @@ import {
   X,
   AlertCircle,
   LogOut,
+  Upload,
+  ImageIcon,
 } from "lucide-react";
 
 interface Mobil {
@@ -23,6 +25,29 @@ interface Mobil {
   fitur: string[];
   gambar_urls: string[];
 }
+
+const MEREK_LIST = [
+  "Toyota",
+  "Honda",
+  "Suzuki",
+  "Daihatsu",
+  "Mitsubishi",
+  "Nissan",
+  "Mazda",
+  "Hyundai",
+  "Kia",
+  "BMW",
+  "Mercedes-Benz",
+  "Audi",
+  "Lexus",
+  "Volkswagen",
+  "Ford",
+  "Chevrolet",
+  "Isuzu",
+  "Wuling",
+  "DFSK",
+  "Chery",
+];
 
 export default function PanelAdminMobil() {
   const [listMobil, setListMobil] = useState<Mobil[]>([]);
@@ -39,13 +64,12 @@ export default function PanelAdminMobil() {
   const [deskripsi, setDeskripsi] = useState<string>("");
   const [inputFitur, setInputFitur] = useState<string>("");
   const [inputGambar, setInputGambar] = useState<string>("");
+  const [previewGambar, setPreviewGambar] = useState<string[]>([]);
+  const [localFiles, setLocalFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // =====================================================================
-  // SOLUSI TOTAL REACT 19: Gunakan Pola Fetching di Dalam Efek (Murni Asinkron)
-  // =====================================================================
   useEffect(() => {
-    let aktif = true; // Flag untuk mencegah balapan data (race condition)
-
+    let aktif = true;
     async function muatDataDuniaNyata() {
       try {
         const { data, error } = await supabase
@@ -54,10 +78,7 @@ export default function PanelAdminMobil() {
             "id, nama, merek, harga, diskon, deskripsi, fitur, gambar_urls",
           )
           .order("created_at", { ascending: false });
-
         if (error) throw new Error(error.message);
-
-        // Hanya ubah state jika komponen masih aktif (tidak di-unmount)
         if (aktif && data) {
           const dataTerformat: Mobil[] = data.map((item) => ({
             id: String(item.id),
@@ -71,7 +92,6 @@ export default function PanelAdminMobil() {
               ? (item.gambar_urls as string[])
               : [],
           }));
-
           setListMobil(dataTerformat);
           setPesanEror(null);
         }
@@ -82,23 +102,15 @@ export default function PanelAdminMobil() {
           setPesanEror(pesan);
         }
       } finally {
-        if (aktif) {
-          setLoading(false);
-        }
+        if (aktif) setLoading(false);
       }
     }
-
     muatDataDuniaNyata();
-
-    // Fungsi pembersih (cleanup) otomatis dijalankan React jika komponen hancur
     return () => {
       aktif = false;
     };
-  }, []); // Array dependensi KOSONG [] memastikan ini HANYA berjalan 1x pas halaman dibuka
+  }, []);
 
-  // =====================================================================
-  // FUNGSI AKSI (TETAP SAMA SEPERTI SEBELUMNYA TAPI AMAN DARI EFFECT LINT)
-  // =====================================================================
   const pemicuRefreshData = async () => {
     setLoading(true);
     try {
@@ -129,19 +141,49 @@ export default function PanelAdminMobil() {
     }
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    setLocalFiles((prev) => [...prev, ...files]);
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setPreviewGambar((prev) => [...prev, ev.target?.result as string]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const hapusPreview = (index: number) => {
+    setPreviewGambar((prev) => prev.filter((_, i) => i !== index));
+    setLocalFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const resetForm = () => {
+    setMerek("");
+    setNama("");
+    setHarga("");
+    setDiskon("");
+    setDeskripsi("");
+    setInputFitur("");
+    setInputGambar("");
+    setPreviewGambar([]);
+    setLocalFiles([]);
+  };
+
   const tanganiTambahMobil = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setTombolLoading(true);
-
     const arrayFitur = inputFitur
       .split(",")
       .map((f) => f.trim())
-      .filter((f) => f !== "");
-    const arrayGambar = inputGambar
+      .filter(Boolean);
+    const arrayGambarUrl = inputGambar
       .split(",")
       .map((g) => g.trim())
-      .filter((g) => g !== "");
-
+      .filter(Boolean);
+    // Gabungkan: preview base64 dari file lokal + URL manual
+    const semuaGambar = [...previewGambar, ...arrayGambarUrl];
     try {
       const { error } = await supabase.from("mobil").insert([
         {
@@ -152,22 +194,15 @@ export default function PanelAdminMobil() {
           deskripsi,
           fitur: arrayFitur,
           gambar_urls:
-            arrayGambar.length > 0
-              ? arrayGambar
+            semuaGambar.length > 0
+              ? semuaGambar
               : [
                   "https://images.unsplash.com/photo-1617469767053-d3b508a0d822?w=600",
                 ],
         },
       ]);
       if (error) throw new Error(error.message);
-
-      setMerek("");
-      setNama("");
-      setHarga("");
-      setDiskon("");
-      setDeskripsi("");
-      setInputFitur("");
-      setInputGambar("");
+      resetForm();
       setModalTerbuka(false);
       await pemicuRefreshData();
     } catch (err) {
@@ -193,128 +228,225 @@ export default function PanelAdminMobil() {
     window.location.href = "/masuk";
   };
 
-
-
-  const formatRupiah = (angka: number): string => {
-    return new Intl.NumberFormat("id-ID", {
+  const formatRupiah = (angka: number): string =>
+    new Intl.NumberFormat("id-ID", {
       style: "currency",
       currency: "IDR",
       maximumFractionDigits: 0,
     }).format(angka);
-  };
 
   return (
-    <main className="min-h-screen bg-slate-900 text-slate-100 p-6 sm:p-10">
-      <div className="max-w-7xl mx-auto space-y-8">
-        {/* HEADER PANEL */}
-        <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-800 pb-6">
-          <div>
-            <div className="flex items-center gap-2 text-blue-500 font-bold tracking-wider text-xs uppercase">
-              <Car className="h-4 w-4" /> Panel Manajemen Eksekutif
+    <main className="min-h-screen bg-gray-50 text-gray-900">
+      {/* TOP NAV */}
+      <nav className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-blue-600 flex items-center justify-center shadow">
+              <Car className="h-5 w-5 text-white" />
             </div>
-            <h1 className="text-3xl font-black tracking-tight mt-1 text-white">
-              Kelola Inventaris Mobil
-            </h1>
+            <div>
+              <p className="text-[11px] font-semibold text-blue-600 uppercase tracking-widest leading-none">
+                Admin Panel
+              </p>
+              <p className="text-base font-bold text-gray-900 leading-tight">
+                Manajemen Inventaris
+              </p>
+            </div>
           </div>
-          <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setModalTerbuka(true)}
-              className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-lg transition-colors flex-1 sm:flex-initial"
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors"
             >
               <Plus className="h-4 w-4 stroke-[2.5]" />
-              <span>Tambah Mobil</span>
+              Tambah Mobil
             </button>
             <button
               type="button"
               onClick={tanganiKeluar}
-              className="inline-flex items-center justify-center bg-slate-800 hover:bg-red-950/40 border border-slate-700 hover:border-red-900 text-slate-300 hover:text-red-400 p-2.5 rounded-xl transition-all"
-              title="Keluar dari Panel Admin"
+              title="Keluar"
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-all"
             >
-              <LogOut className="h-5 w-5" />
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">Keluar</span>
             </button>
           </div>
-        </header>
+        </div>
+      </nav>
 
+      <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
+        {/* STATS ROW */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {[
+            {
+              label: "Total Unit",
+              value: listMobil.length,
+              color: "text-blue-600",
+            },
+            {
+              label: "Merek Tersedia",
+              value: new Set(listMobil.map((m) => m.merek)).size,
+              color: "text-violet-600",
+            },
+            {
+              label: "Ada Diskon",
+              value: listMobil.filter((m) => m.diskon > 0).length,
+              color: "text-emerald-600",
+            },
+            {
+              label: "Harga Tertinggi",
+              value: listMobil.length
+                ? formatRupiah(Math.max(...listMobil.map((m) => m.harga)))
+                : "—",
+              color: "text-orange-500",
+              small: true,
+            },
+          ].map((stat) => (
+            <div
+              key={stat.label}
+              className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
+            >
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                {stat.label}
+              </p>
+              <p
+                className={`mt-1 font-bold ${stat.small ? "text-lg" : "text-2xl"} ${stat.color}`}
+              >
+                {stat.value}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        {/* ERROR */}
         {pesanEror && (
-          <div
-            className="bg-red-950/40 border border-red-800 text-red-400 p-4 rounded-xl flex items-start gap-3 text-sm"
-            role="alert"
-          >
-            <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
+          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-start gap-3 text-sm">
+            <AlertCircle className="h-5 w-5 shrink-0 mt-0.5 text-red-500" />
             <span>
-              <span className="font-bold">Koneksi Gagal:</span> {pesanEror}
+              <span className="font-semibold">Koneksi Gagal:</span> {pesanEror}
             </span>
           </div>
         )}
 
-        {/* TABEL INVENTARIS */}
-        <section
-          aria-label="Katalog Showroom"
-          className="bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden shadow-2xl"
-        >
+        {/* TABLE CARD */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-bold text-gray-900">
+                Daftar Unit Mobil
+              </h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                {listMobil.length} unit tercatat di inventaris
+              </p>
+            </div>
+          </div>
+
           {loading ? (
-            <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-400">
-              <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
-              <p className="text-sm">Menyinkronkan kluster Supabase...</p>
+            <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
+              <Loader2 className="h-7 w-7 animate-spin text-blue-500" />
+              <p className="text-sm">Memuat data inventaris…</p>
             </div>
           ) : listMobil.length === 0 ? (
-            <div className="text-center py-20 text-slate-500 text-sm">
-              Belum ada data unit mobil. Silakan klik tombol Tambah Mobil.
+            <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
+              <Car className="h-10 w-10 text-gray-300" />
+              <p className="text-sm font-medium">Belum ada unit mobil</p>
+              <p className="text-xs text-gray-300">
+                Klik Tambah Mobil untuk mulai mengisi inventaris
+              </p>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
+              <table className="w-full text-left">
                 <thead>
-                  <tr className="border-b border-slate-800 bg-slate-900/50 text-xs font-bold uppercase tracking-wider text-slate-400">
-                    <th className="p-4 pl-6">Detail Mobil</th>
-                    <th className="p-4">Merek</th>
-                    <th className="p-4">Harga Dasar</th>
-                    <th className="p-4">Diskon</th>
-                    <th className="p-4 pr-6 text-right">Aksi</th>
+                  <tr className="bg-gray-50 border-b border-gray-100 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                    <th className="px-6 py-3">Unit Mobil</th>
+                    <th className="px-4 py-3">Merek</th>
+                    <th className="px-4 py-3">Harga</th>
+                    <th className="px-4 py-3">Diskon</th>
+                    <th className="px-4 py-3">Fitur</th>
+                    <th className="px-4 py-3 text-right">Aksi</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/60 text-sm text-slate-300">
+                <tbody className="divide-y divide-gray-50">
                   {listMobil.map((mobil) => (
                     <tr
                       key={mobil.id}
-                      className="hover:bg-slate-900/30 transition-colors"
+                      className="hover:bg-gray-50/80 transition-colors group"
                     >
-                      <td className="p-4 pl-6 flex items-center gap-3">
-                        <div className="h-10 w-16 rounded-lg bg-slate-800 overflow-hidden shrink-0 border border-slate-700">
-                          <img
-                            src={
-                              mobil.gambar_urls?.[0] ||
-                              "https://images.unsplash.com/photo-1617469767053-d3b508a0d822?w=100"
-                            }
-                            alt={mobil.nama}
-                            className="w-full h-full object-cover"
-                          />
+                      <td className="px-6 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <div className="h-11 w-16 rounded-lg bg-gray-100 overflow-hidden shrink-0 border border-gray-200">
+                            {mobil.gambar_urls?.[0] ? (
+                              <img
+                                src={mobil.gambar_urls[0]}
+                                alt={mobil.nama}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center">
+                                <ImageIcon className="h-5 w-5 text-gray-300" />
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-semibold text-gray-900 text-sm">
+                              {mobil.nama}
+                            </p>
+                            {mobil.deskripsi && (
+                              <p className="text-xs text-gray-400 mt-0.5 max-w-[200px] truncate">
+                                {mobil.deskripsi}
+                              </p>
+                            )}
+                          </div>
                         </div>
-                        <span className="font-semibold text-white">
-                          {mobil.nama}
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <span className="inline-block bg-gray-100 text-gray-600 text-xs font-semibold px-2.5 py-1 rounded-md uppercase tracking-wide">
+                          {mobil.merek}
                         </span>
                       </td>
-                      <td className="p-4 uppercase tracking-wider text-xs font-medium text-slate-400">
-                        {mobil.merek}
+                      <td className="px-4 py-3.5">
+                        <span className="text-sm font-semibold text-gray-800">
+                          {formatRupiah(mobil.harga)}
+                        </span>
                       </td>
-                      <td className="p-4 font-medium">
-                        {formatRupiah(mobil.harga)}
-                      </td>
-                      <td className="p-4">
+                      <td className="px-4 py-3.5">
                         {mobil.diskon > 0 ? (
-                          <span className="bg-red-950/50 border border-red-800 text-red-400 px-2 py-0.5 rounded text-xs font-bold">
-                            {mobil.diskon}%
+                          <span className="inline-block bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold px-2 py-0.5 rounded-md">
+                            -{mobil.diskon}%
                           </span>
                         ) : (
-                          <span className="text-slate-600">-</span>
+                          <span className="text-gray-300 text-sm">—</span>
                         )}
                       </td>
-                      <td className="p-4 pr-6 text-right">
+                      <td className="px-4 py-3.5">
+                        {mobil.fitur.length > 0 ? (
+                          <div className="flex flex-wrap gap-1 max-w-[180px]">
+                            {mobil.fitur.slice(0, 3).map((f) => (
+                              <span
+                                key={f}
+                                className="bg-blue-50 text-blue-600 text-[10px] font-medium px-1.5 py-0.5 rounded"
+                              >
+                                {f}
+                              </span>
+                            ))}
+                            {mobil.fitur.length > 3 && (
+                              <span className="text-[10px] text-gray-400 font-medium">
+                                +{mobil.fitur.length - 3}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-gray-300 text-sm">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3.5 text-right">
                         <button
                           type="button"
                           onClick={() => tanganiHapusMobil(mobil.id)}
-                          className="text-slate-500 hover:text-red-400 p-2 rounded-lg hover:bg-red-500/10 transition-all"
+                          className="text-gray-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                          title="Hapus unit"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -325,167 +457,285 @@ export default function PanelAdminMobil() {
               </table>
             </div>
           )}
-        </section>
+        </div>
+      </div>
 
-        {/* DIALOG FORM MODAL */}
-        {modalTerbuka && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <dialog
-              open
-              className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl text-slate-100 shadow-2xl block overflow-hidden"
-            >
-              <div className="flex items-center justify-between p-6 border-b border-slate-800 bg-slate-950/40">
-                <h2 className="text-xl font-bold text-white">
-                  Input Unit Baru
+      {/* MODAL */}
+      {modalTerbuka && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{
+            backgroundColor: "rgba(15,23,42,0.45)",
+            backdropFilter: "blur(4px)",
+          }}
+        >
+          {/* Overlay klik untuk tutup */}
+          <div
+            className="absolute inset-0"
+            onClick={() => {
+              setModalTerbuka(false);
+              resetForm();
+            }}
+          />
+
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">
+                  Tambah Unit Baru
                 </h2>
-                <button
-                  type="button"
-                  onClick={() => setModalTerbuka(false)}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors"
-                >
-                  <X className="h-5 w-5" />
-                </button>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Isi detail unit mobil yang akan ditambahkan
+                </p>
               </div>
-
-              <form
-                onSubmit={tanganiTambahMobil}
-                className="p-6 space-y-4 max-h-[75vh] overflow-y-auto"
+              <button
+                type="button"
+                onClick={() => {
+                  setModalTerbuka(false);
+                  resetForm();
+                }}
+                className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 p-1.5 rounded-lg transition-all"
               >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body — scrollable */}
+            <form
+              onSubmit={tanganiTambahMobil}
+              className="flex flex-col flex-1 overflow-hidden"
+            >
+              <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+                {/* Merek + Nama */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-400 uppercase">
-                      Merek
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                      Merek <span className="text-red-500">*</span>
                     </label>
-                    <input
-                      type="text"
+                    <select
                       required
-                      placeholder="Hyundai"
                       value={merek}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        setMerek(e.target.value)
-                      }
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
-                    />
+                      onChange={(e) => setMerek(e.target.value)}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all appearance-none cursor-pointer"
+                    >
+                      <option value="" disabled>
+                        Pilih merek…
+                      </option>
+                      {MEREK_LIST.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-400 uppercase">
-                      Nama / Seri
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                      Nama / Seri <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
                       required
                       placeholder="Ioniq 5"
                       value={nama}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        setNama(e.target.value)
-                      }
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                      onChange={(e) => setNama(e.target.value)}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                     />
                   </div>
                 </div>
 
+                {/* Harga + Diskon */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-400 uppercase">
-                      Harga Dasar
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                      Harga Dasar (Rp) <span className="text-red-500">*</span>
                     </label>
-                    <input
-                      type="number"
-                      required
-                      placeholder="750000000"
-                      value={harga}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        setHarga(e.target.value)
-                      }
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
-                    />
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-gray-400">
+                        Rp
+                      </span>
+                      <input
+                        type="number"
+                        required
+                        placeholder="750.000.000"
+                        value={harga}
+                        onChange={(e) => setHarga(e.target.value)}
+                        className="w-full bg-white border border-gray-300 rounded-lg pl-9 pr-3 py-2.5 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                    </div>
+                    {harga && (
+                      <p className="text-xs text-blue-500 font-medium">
+                        {formatRupiah(parseFloat(harga) || 0)}
+                      </p>
+                    )}
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-400 uppercase">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
                       Diskon (%)
                     </label>
-                    <input
-                      type="number"
-                      placeholder="5"
-                      value={diskon}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        setDiskon(e.target.value)
-                      }
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
-                    />
+                    <div className="relative">
+                      <input
+                        type="number"
+                        placeholder="0"
+                        min="0"
+                        max="100"
+                        value={diskon}
+                        onChange={(e) => setDiskon(e.target.value)}
+                        className="w-full bg-white border border-gray-300 rounded-lg px-3 pr-8 py-2.5 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 font-medium">
+                        %
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-400 uppercase">
+                {/* Deskripsi */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Deskripsi
                   </label>
                   <textarea
                     rows={3}
-                    placeholder="Kondisi baru..."
+                    placeholder="Kondisi baru, kilometer rendah…"
                     value={deskripsi}
-                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-                      setDeskripsi(e.target.value)
-                    }
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all resize-none"
+                    onChange={(e) => setDeskripsi(e.target.value)}
+                    className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none"
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-400 uppercase">
-                    Fitur (Pisahkan dengan koma `,`)
+                {/* Fitur */}
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    Fitur{" "}
+                    <span className="text-gray-300 font-normal normal-case">
+                      (pisahkan dengan koma)
+                    </span>
                   </label>
                   <input
                     type="text"
-                    placeholder="Autopilot, AWD, Sunroof"
+                    placeholder="Autopilot, AWD, Sunroof, Blind Spot Monitor"
                     value={inputFitur}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setInputFitur(e.target.value)
-                    }
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
+                    onChange={(e) => setInputFitur(e.target.value)}
+                    className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                   />
+                  {inputFitur && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {inputFitur
+                        .split(",")
+                        .map((f) => f.trim())
+                        .filter(Boolean)
+                        .map((f) => (
+                          <span
+                            key={f}
+                            className="bg-blue-50 text-blue-600 text-xs font-medium px-2 py-0.5 rounded-md"
+                          >
+                            {f}
+                          </span>
+                        ))}
+                    </div>
+                  )}
                 </div>
 
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-400 uppercase">
-                    URL Gambar (Pisahkan dengan koma `,` jika banyak)
+                {/* Upload Gambar */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    Foto Mobil
                   </label>
-                  <input
-                    type="text"
-                    placeholder="https://link1.com, https://link2.com"
-                    value={inputGambar}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setInputGambar(e.target.value)
-                    }
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500 transition-all"
-                  />
-                </div>
 
-                <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setModalTerbuka(false)}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold px-4 py-2.5 rounded-xl transition-all"
+                  {/* Drag & Drop Area */}
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="border-2 border-dashed border-gray-200 hover:border-blue-400 rounded-xl p-5 text-center cursor-pointer transition-colors group"
                   >
-                    Batal
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={tombolLoading}
-                    className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-all min-w-[120px]"
-                  >
-                    {tombolLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <span>Simpan</span>
-                    )}
-                  </button>
+                    <Upload className="h-7 w-7 text-gray-300 group-hover:text-blue-400 mx-auto mb-2 transition-colors" />
+                    <p className="text-sm font-medium text-gray-500 group-hover:text-blue-500 transition-colors">
+                      Klik untuk unggah foto
+                    </p>
+                    <p className="text-xs text-gray-300 mt-0.5">
+                      JPG, PNG, WEBP — bisa lebih dari 1 foto
+                    </p>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={handleFileChange}
+                    />
+                  </div>
+
+                  {/* Preview Grid */}
+                  {previewGambar.length > 0 && (
+                    <div className="grid grid-cols-4 gap-2">
+                      {previewGambar.map((src, i) => (
+                        <div
+                          key={i}
+                          className="relative group/img rounded-lg overflow-hidden border border-gray-200 aspect-video bg-gray-100"
+                        >
+                          <img
+                            src={src}
+                            alt={`preview-${i}`}
+                            className="w-full h-full object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => hapusPreview(i)}
+                            className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 group-hover/img:opacity-100 transition-opacity"
+                          >
+                            <X className="h-4 w-4 text-white" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* URL Manual */}
+                  <div className="space-y-1.5 pt-1">
+                    <label className="block text-xs text-gray-400">
+                      atau tambahkan URL gambar (pisahkan dengan koma)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="https://link1.com/foto.jpg, https://link2.com/foto.jpg"
+                      value={inputGambar}
+                      onChange={(e) => setInputGambar(e.target.value)}
+                      className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                    />
+                  </div>
                 </div>
-              </form>
-            </dialog>
+              </div>
+
+              {/* Modal Footer — fixed */}
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl flex items-center justify-end gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalTerbuka(false);
+                    resetForm();
+                  }}
+                  className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-semibold px-4 py-2 rounded-lg transition-all"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={tombolLoading}
+                  className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-semibold px-6 py-2 rounded-lg transition-all min-w-[120px] shadow-sm"
+                >
+                  {tombolLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Menyimpan…
+                    </>
+                  ) : (
+                    "Simpan Unit"
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </main>
   );
 }
