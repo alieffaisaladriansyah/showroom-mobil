@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+/* cspell:disable */
+import React, { useState, useEffect } from "react"; // Hapus useCallback karena sudah tidak dibutuhkan
 import { supabase } from "@/lib/supabase";
 import {
   Plus,
@@ -39,78 +40,125 @@ export default function PanelAdminMobil() {
   const [inputFitur, setInputFitur] = useState<string>("");
   const [inputGambar, setInputGambar] = useState<string>("");
 
-  const ambilDataMobil = useCallback(async () => {
-    try {
-      setLoading(true);
-      setPesanEror(null);
+  // =====================================================================
+  // SOLUSI TOTAL REACT 19: Gunakan Pola Fetching di Dalam Efek (Murni Asinkron)
+  // =====================================================================
+  useEffect(() => {
+    let aktif = true; // Flag untuk mencegah balapan data (race condition)
 
-      const { data, error } = await supabase
+    async function muatDataDuniaNyata() {
+      try {
+        const { data, error } = await supabase
+          .from("mobil")
+          .select(
+            "id, nama, merek, harga, diskon, deskripsi, fitur, gambar_urls",
+          )
+          .order("created_at", { ascending: false });
+
+        if (error) throw new Error(error.message);
+
+        // Hanya ubah state jika komponen masih aktif (tidak di-unmount)
+        if (aktif && data) {
+          const dataTerformat: Mobil[] = data.map((item) => ({
+            id: String(item.id),
+            nama: String(item.nama || ""),
+            merek: String(item.merek || ""),
+            harga: Number(item.harga) || 0,
+            diskon: Number(item.diskon) || 0,
+            deskripsi: String(item.deskripsi || ""),
+            fitur: Array.isArray(item.fitur) ? (item.fitur as string[]) : [],
+            gambar_urls: Array.isArray(item.gambar_urls)
+              ? (item.gambar_urls as string[])
+              : [],
+          }));
+
+          setListMobil(dataTerformat);
+          setPesanEror(null);
+        }
+      } catch (err) {
+        if (aktif) {
+          const pesan =
+            err instanceof Error ? err.message : "Gagal memuat data.";
+          setPesanEror(pesan);
+        }
+      } finally {
+        if (aktif) {
+          setLoading(false);
+        }
+      }
+    }
+
+    muatDataDuniaNyata();
+
+    // Fungsi pembersih (cleanup) otomatis dijalankan React jika komponen hancur
+    return () => {
+      aktif = false;
+    };
+  }, []); // Array dependensi KOSONG [] memastikan ini HANYA berjalan 1x pas halaman dibuka
+
+  // =====================================================================
+  // FUNGSI AKSI (TETAP SAMA SEPERTI SEBELUMNYA TAPI AMAN DARI EFFECT LINT)
+  // =====================================================================
+  const pemicuRefreshData = async () => {
+    setLoading(true);
+    try {
+      const { data } = await supabase
         .from("mobil")
         .select("id, nama, merek, harga, diskon, deskripsi, fitur, gambar_urls")
         .order("created_at", { ascending: false });
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
       if (data) {
-        const dataTerformat: Mobil[] = data.map((item) => ({
-          id: String(item.id),
-          nama: String(item.nama || ""),
-          merek: String(item.merek || ""),
-          harga: Number(item.harga) || 0,
-          diskon: Number(item.diskon) || 0,
-          deskripsi: String(item.deskripsi || ""),
-          fitur: Array.isArray(item.fitur) ? (item.fitur as string[]) : [],
-          gambar_urls: Array.isArray(item.gambar_urls)
-            ? (item.gambar_urls as string[])
-            : [],
-        }));
-        setListMobil(dataTerformat);
+        setListMobil(
+          data.map((item) => ({
+            id: String(item.id),
+            nama: String(item.nama || ""),
+            merek: String(item.merek || ""),
+            harga: Number(item.harga) || 0,
+            diskon: Number(item.diskon) || 0,
+            deskripsi: String(item.deskripsi || ""),
+            fitur: Array.isArray(item.fitur) ? item.fitur : [],
+            gambar_urls: Array.isArray(item.gambar_urls)
+              ? item.gambar_urls
+              : [],
+          })),
+        );
       }
-    } catch (err) {
-      const pesan =
-        err instanceof Error ? err.message : "Gagal memuat data dari database.";
-      setPesanEror(pesan);
+    } catch (e) {
+      console.error(e);
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  useEffect(() => {
-    ambilDataMobil();
-  }, [ambilDataMobil]);
+  };
 
   const tanganiTambahMobil = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setTombolLoading(true);
 
-    const arrayFitur: string[] = inputFitur
+    const arrayFitur = inputFitur
       .split(",")
       .map((f) => f.trim())
       .filter((f) => f !== "");
-    const arrayGambar: string[] = inputGambar
+    const arrayGambar = inputGambar
       .split(",")
       .map((g) => g.trim())
       .filter((g) => g !== "");
 
-    const dataBaru = {
-      merek,
-      nama,
-      harga: parseFloat(harga) || 0,
-      diskon: diskon ? parseFloat(diskon) : 0,
-      deskripsi,
-      fitur: arrayFitur,
-      gambar_urls:
-        arrayGambar.length > 0
-          ? arrayGambar
-          : [
-              "https://images.unsplash.com/photo-1617469767053-d3b508a0d822?w=600",
-            ],
-    };
-
     try {
-      const { error } = await supabase.from("mobil").insert([dataBaru]);
+      const { error } = await supabase.from("mobil").insert([
+        {
+          merek,
+          nama,
+          harga: parseFloat(harga) || 0,
+          diskon: diskon ? parseFloat(diskon) : 0,
+          deskripsi,
+          fitur: arrayFitur,
+          gambar_urls:
+            arrayGambar.length > 0
+              ? arrayGambar
+              : [
+                  "https://images.unsplash.com/photo-1617469767053-d3b508a0d822?w=600",
+                ],
+        },
+      ]);
       if (error) throw new Error(error.message);
 
       setMerek("");
@@ -121,11 +169,9 @@ export default function PanelAdminMobil() {
       setInputFitur("");
       setInputGambar("");
       setModalTerbuka(false);
-      await ambilDataMobil();
+      await pemicuRefreshData();
     } catch (err) {
-      const pesan =
-        err instanceof Error ? err.message : "Gagal menyimpan unit.";
-      alert(pesan);
+      alert(err instanceof Error ? err.message : "Gagal menyimpan.");
     } finally {
       setTombolLoading(false);
     }
@@ -133,15 +179,12 @@ export default function PanelAdminMobil() {
 
   const tanganiHapusMobil = async (id: string) => {
     if (!confirm("Hapus unit mobil ini dari inventaris?")) return;
-
     try {
       const { error } = await supabase.from("mobil").delete().eq("id", id);
       if (error) throw new Error(error.message);
-      await ambilDataMobil();
+      await pemicuRefreshData();
     } catch (err) {
-      const pesan =
-        err instanceof Error ? err.message : "Gagal menghapus data.";
-      alert(pesan);
+      alert(err instanceof Error ? err.message : "Gagal menghapus.");
     }
   };
 
@@ -149,6 +192,8 @@ export default function PanelAdminMobil() {
     await supabase.auth.signOut();
     window.location.href = "/masuk";
   };
+
+
 
   const formatRupiah = (angka: number): string => {
     return new Intl.NumberFormat("id-ID", {
