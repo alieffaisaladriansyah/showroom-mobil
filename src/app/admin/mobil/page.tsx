@@ -24,6 +24,15 @@ interface Mobil {
   deskripsi: string;
   fitur: string[];
   gambar_urls: string[];
+  banner_url?: string | null;
+}
+
+interface Banner {
+  id: number;
+  gambar_url?: string | null;
+  judul?: string | null;
+  aktif?: boolean;
+  urutan?: number;
 }
 
 const MEREK_LIST = [
@@ -50,6 +59,183 @@ const MEREK_LIST = [
 ];
 
 export default function PanelAdminMobil() {
+  const [activeTab, setActiveTab] = useState<"mobil" | "banner">("mobil");
+
+  // Banner manager state
+  const [banners, setBanners] = useState<Banner[]>([]);
+  const [loadingBanners, setLoadingBanners] = useState<boolean>(true);
+  const [bannerJudul, setBannerJudul] = useState<string>("");
+  const [bannerTombolLoading, setBannerTombolLoading] =
+    useState<boolean>(false);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadBanners() {
+      try {
+        const { data } = await supabase
+          .from("banners")
+          .select("id, gambar_url, judul, aktif, urutan")
+          .order("urutan", { ascending: true });
+        if (mounted && data) setBanners(data as Banner[]);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (mounted) setLoadingBanners(false);
+      }
+    }
+    loadBanners();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const refreshBanners = async () => {
+    setLoadingBanners(true);
+    try {
+      const { data } = await supabase
+        .from("banners")
+        .select("id, gambar_url, judul, aktif, urutan")
+        .order("urutan", { ascending: true });
+      if (data) setBanners(data as Banner[]);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingBanners(false);
+    }
+  };
+
+  const handleAddBanner = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setBannerTombolLoading(true);
+    try {
+      if (!localBannerFile)
+        throw new Error("Pilih file banner terlebih dahulu");
+
+      // Preflight: cek apakah bucket 'banners' ada supaya error lebih jelas
+      try {
+        const { error: listErr } = await supabase.storage
+          .from("banners")
+          .list("", { limit: 1 });
+        if (listErr) {
+          // Roda error handling di luar untuk konsistensi
+          throw listErr;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const lower = msg.toLowerCase();
+        if (
+          lower.includes("bucket") &&
+          (lower.includes("not found") ||
+            lower.includes("does not exist") ||
+            lower.includes("not exist") ||
+            lower.includes("no such bucket"))
+        ) {
+          const help =
+            "Bucket 'banners' tidak ditemukan di proyek Supabase Anda. " +
+            "Silakan buat bucket bernama 'banners' di Supabase Dashboard → Storage → Buckets (set Public jika ingin akses publik).";
+          setPesanEror(help);
+          alert(help);
+          setBannerTombolLoading(false);
+          return;
+        }
+        // jika bukan bucket error, lanjutkan untuk ditangani di catch utama
+        throw e;
+      }
+
+      // Use a stable random id for filename to avoid lint rule on impure Date.now
+      const filePath = `banners/${crypto.randomUUID()}_${localBannerFile.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from("banners")
+        .upload(filePath, localBannerFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+      if (uploadError) throw new Error(uploadError.message);
+
+      const { data: urlData } = supabase.storage
+        .from("banners")
+        .getPublicUrl(filePath);
+      const publicUrl = urlData.publicUrl;
+
+      const { error } = await supabase
+        .from("banners")
+        .insert([
+          { gambar_url: publicUrl, judul: bannerJudul || null, aktif: true },
+        ]);
+      if (error) throw new Error(error.message);
+
+      setBannerJudul("");
+      setPreviewBanner(null);
+      setLocalBannerFile(null);
+      await refreshBanners();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const lower = msg.toLowerCase();
+      // Detect row-level security policy violation and give actionable SQL
+      if (
+        lower.includes("violates row-level") ||
+        lower.includes("row-level security")
+      ) {
+        const help =
+          "Insert gagal karena Row Level Security (RLS) pada tabel 'banners'.\n" +
+          "Jalankan SQL berikut di Supabase SQL editor untuk mengizinkan insert oleh pengguna terautentikasi:\n\n" +
+          "-- Aktifkan RLS jika belum\n" +
+          "ALTER TABLE public.banners ENABLE ROW LEVEL SECURITY;\n\n" +
+          "-- Izinkan pengguna authenticated melakukan INSERT\n" +
+          "CREATE POLICY allow_authenticated_insert ON public.banners\n" +
+          "  FOR INSERT\n" +
+          "  TO authenticated\n" +
+          "  USING (true)\n" +
+          "  WITH CHECK (true);\n\n" +
+          "Jika Anda ingin juga mengizinkan UPDATE/DELETE, tambahkan policy yang sesuai.";
+        setPesanEror(help);
+        alert(help);
+        return;
+      }
+      // Detect common bucket-not-found messages and show actionable instruction
+      if (
+        lower.includes("bucket") &&
+        (lower.includes("not found") ||
+          lower.includes("does not exist") ||
+          lower.includes("not exist") ||
+          lower.includes("no such bucket"))
+      ) {
+        const help =
+          "Bucket 'banners' tidak ditemukan di proyek Supabase Anda. " +
+          "Silakan buat bucket bernama 'banners' di Supabase Dashboard → Storage → Buckets (set Public jika ingin akses publik).";
+        setPesanEror(help);
+        alert(help);
+      } else {
+        alert(msg || "Gagal menambah banner");
+      }
+    } finally {
+      setBannerTombolLoading(false);
+    }
+  };
+
+  const handleToggleBanner = async (id: number, aktif: boolean) => {
+    try {
+      const { error } = await supabase
+        .from("banners")
+        .update({ aktif: !aktif })
+        .eq("id", id);
+      if (error) throw new Error(error.message);
+      await refreshBanners();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Gagal mengupdate banner");
+    }
+  };
+
+  const handleDeleteBanner = async (id: number) => {
+    if (!confirm("Hapus banner ini?")) return;
+    try {
+      const { error } = await supabase.from("banners").delete().eq("id", id);
+      if (error) throw new Error(error.message);
+      await refreshBanners();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Gagal menghapus banner");
+    }
+  };
   const [listMobil, setListMobil] = useState<Mobil[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [tombolLoading, setTombolLoading] = useState<boolean>(false);
@@ -65,8 +251,12 @@ export default function PanelAdminMobil() {
   const [inputFitur, setInputFitur] = useState<string>("");
   const [inputGambar, setInputGambar] = useState<string>("");
   const [previewGambar, setPreviewGambar] = useState<string[]>([]);
-  const [localFiles, setLocalFiles] = useState<File[]>([]);
+  const [, setLocalFiles] = useState<File[]>([]);
+  const [previewBanner, setPreviewBanner] = useState<string | null>(null);
+  const [localBannerFile, setLocalBannerFile] = useState<File | null>(null);
+  const [bannerUrl, setBannerUrl] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const bannerFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let aktif = true;
@@ -75,7 +265,7 @@ export default function PanelAdminMobil() {
         const { data, error } = await supabase
           .from("mobil")
           .select(
-            "id, nama, merek, harga, diskon, deskripsi, fitur, gambar_urls",
+            "id, nama, merek, harga, diskon, deskripsi, fitur, gambar_urls, banner_url",
           )
           .order("created_at", { ascending: false });
         if (error) throw new Error(error.message);
@@ -91,6 +281,7 @@ export default function PanelAdminMobil() {
             gambar_urls: Array.isArray(item.gambar_urls)
               ? (item.gambar_urls as string[])
               : [],
+            banner_url: item.banner_url ? String(item.banner_url) : null,
           }));
           setListMobil(dataTerformat);
           setPesanEror(null);
@@ -116,7 +307,9 @@ export default function PanelAdminMobil() {
     try {
       const { data } = await supabase
         .from("mobil")
-        .select("id, nama, merek, harga, diskon, deskripsi, fitur, gambar_urls")
+        .select(
+          "id, nama, merek, harga, diskon, deskripsi, fitur, gambar_urls, banner_url",
+        )
         .order("created_at", { ascending: false });
       if (data) {
         setListMobil(
@@ -131,6 +324,7 @@ export default function PanelAdminMobil() {
             gambar_urls: Array.isArray(item.gambar_urls)
               ? item.gambar_urls
               : [],
+            banner_url: item.banner_url ? String(item.banner_url) : null,
           })),
         );
       }
@@ -154,9 +348,25 @@ export default function PanelAdminMobil() {
     });
   };
 
+  const handleBannerFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLocalBannerFile(file);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setPreviewBanner((ev.target?.result as string) || null);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const hapusPreview = (index: number) => {
     setPreviewGambar((prev) => prev.filter((_, i) => i !== index));
     setLocalFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const hapusBannerPreview = () => {
+    setPreviewBanner(null);
+    setLocalBannerFile(null);
   };
 
   const resetForm = () => {
@@ -169,6 +379,9 @@ export default function PanelAdminMobil() {
     setInputGambar("");
     setPreviewGambar([]);
     setLocalFiles([]);
+    setPreviewBanner(null);
+    setLocalBannerFile(null);
+    setBannerUrl("");
   };
 
   const tanganiTambahMobil = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -189,8 +402,8 @@ export default function PanelAdminMobil() {
         {
           merek,
           nama,
-          harga: parseFloat(harga) || 0,
-          diskon: diskon ? parseFloat(diskon) : 0,
+          harga: Number.parseFloat(harga) || 0,
+          diskon: diskon ? Number.parseFloat(diskon) : 0,
           deskripsi,
           fitur: arrayFitur,
           gambar_urls:
@@ -199,6 +412,7 @@ export default function PanelAdminMobil() {
               : [
                   "https://images.unsplash.com/photo-1617469767053-d3b508a0d822?w=600",
                 ],
+          banner_url: bannerUrl ?? null,
         },
       ]);
       if (error) throw new Error(error.message);
@@ -225,7 +439,7 @@ export default function PanelAdminMobil() {
 
   const tanganiKeluar = async () => {
     await supabase.auth.signOut();
-    window.location.href = "/masuk";
+    globalThis.location.href = "/masuk";
   };
 
   const formatRupiah = (angka: number): string =>
@@ -238,229 +452,400 @@ export default function PanelAdminMobil() {
   return (
     <main className="min-h-screen bg-gray-50 text-gray-900">
       {/* TOP NAV */}
-      <nav className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-blue-600 flex items-center justify-center shadow">
-              <Car className="h-5 w-5 text-white" />
+      <header>
+        <nav className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
+          <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div>
+                <p className="text-[11px] font-semibold text-gray-900 uppercase">
+                  Admin Panel
+                </p>
+                <p className="text-base font-bold text-gray-900 leading-tight">
+                  Manajemen Inventaris
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-[11px] font-semibold text-blue-600 uppercase tracking-widest leading-none">
-                Admin Panel
-              </p>
-              <p className="text-base font-bold text-gray-900 leading-tight">
-                Manajemen Inventaris
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setModalTerbuka(true)}
-              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors"
-            >
-              <Plus className="h-4 w-4 stroke-[2.5]" />
-              Tambah Mobil
-            </button>
-            <button
-              type="button"
-              onClick={tanganiKeluar}
-              title="Keluar"
-              className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-all"
-            >
-              <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">Keluar</span>
-            </button>
-          </div>
-        </div>
-      </nav>
-
-      <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
-        {/* STATS ROW */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {[
-            {
-              label: "Total Unit",
-              value: listMobil.length,
-              color: "text-blue-600",
-            },
-            {
-              label: "Merek Tersedia",
-              value: new Set(listMobil.map((m) => m.merek)).size,
-              color: "text-violet-600",
-            },
-            {
-              label: "Ada Diskon",
-              value: listMobil.filter((m) => m.diskon > 0).length,
-              color: "text-emerald-600",
-            },
-            {
-              label: "Harga Tertinggi",
-              value: listMobil.length
-                ? formatRupiah(Math.max(...listMobil.map((m) => m.harga)))
-                : "—",
-              color: "text-orange-500",
-              small: true,
-            },
-          ].map((stat) => (
-            <div
-              key={stat.label}
-              className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
-            >
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                {stat.label}
-              </p>
-              <p
-                className={`mt-1 font-bold ${stat.small ? "text-lg" : "text-2xl"} ${stat.color}`}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setModalTerbuka(true)}
+                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors"
               >
-                {stat.value}
-              </p>
-            </div>
-          ))}
-        </div>
-
-        {/* ERROR */}
-        {pesanEror && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-start gap-3 text-sm">
-            <AlertCircle className="h-5 w-5 shrink-0 mt-0.5 text-red-500" />
-            <span>
-              <span className="font-semibold">Koneksi Gagal:</span> {pesanEror}
-            </span>
-          </div>
-        )}
-
-        {/* TABLE CARD */}
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-            <div>
-              <h2 className="text-base font-bold text-gray-900">
-                Daftar Unit Mobil
-              </h2>
-              <p className="text-xs text-gray-400 mt-0.5">
-                {listMobil.length} unit tercatat di inventaris
-              </p>
+                <Plus className="h-4 w-4 stroke-[2.5]" />
+                Tambah Mobil
+              </button>
+              <button
+                type="button"
+                onClick={tanganiKeluar}
+                title="Keluar"
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-all"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden sm:inline">Keluar</span>
+              </button>
             </div>
           </div>
+        </nav>
+      </header>
 
-          {loading ? (
-            <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
-              <Loader2 className="h-7 w-7 animate-spin text-blue-500" />
-              <p className="text-sm">Memuat data inventaris…</p>
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* Sidebar */}
+          <aside className="lg:col-span-1 bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+            <h3 className="text-sm font-semibold text-gray-700">Panel</h3>
+            <nav className="mt-3 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab("mobil")}
+                className={`text-left px-3 py-2 rounded-md ${activeTab === "mobil" ? "bg-blue-50 text-blue-600 font-semibold" : "text-gray-600 hover:bg-gray-50"}`}
+              >
+                Manajemen Mobil
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("banner")}
+                className={`text-left px-3 py-2 rounded-md ${activeTab === "banner" ? "bg-blue-50 text-blue-600 font-semibold" : "text-gray-600 hover:bg-gray-50"}`}
+              >
+                Manajemen Banner
+              </button>
+            </nav>
+          </aside>
+
+          {/* Content area */}
+          <section className="lg:col-span-3">
+            {/* STATS ROW */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+              {[
+                {
+                  label: "Total Unit",
+                  value: listMobil.length,
+                  color: "text-blue-600",
+                },
+                {
+                  label: "Merek Tersedia",
+                  value: new Set(listMobil.map((m) => m.merek)).size,
+                  color: "text-violet-600",
+                },
+                {
+                  label: "Ada Diskon",
+                  value: listMobil.filter((m) => m.diskon > 0).length,
+                  color: "text-emerald-600",
+                },
+                {
+                  label: "Harga Tertinggi",
+                  value: listMobil.length
+                    ? formatRupiah(Math.max(...listMobil.map((m) => m.harga)))
+                    : "—",
+                  color: "text-orange-500",
+                  small: true,
+                },
+              ].map((stat) => (
+                <div
+                  key={stat.label}
+                  className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
+                >
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    {stat.label}
+                  </p>
+                  <p
+                    className={`mt-1 font-bold ${stat.small ? "text-lg" : "text-2xl"} ${stat.color}`}
+                  >
+                    {stat.value}
+                  </p>
+                </div>
+              ))}
             </div>
-          ) : listMobil.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
-              <Car className="h-10 w-10 text-gray-300" />
-              <p className="text-sm font-medium">Belum ada unit mobil</p>
-              <p className="text-xs text-gray-300">
-                Klik Tambah Mobil untuk mulai mengisi inventaris
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead>
-                  <tr className="bg-gray-50 border-b border-gray-100 text-[11px] font-bold uppercase tracking-wider text-gray-400">
-                    <th className="px-6 py-3">Unit Mobil</th>
-                    <th className="px-4 py-3">Merek</th>
-                    <th className="px-4 py-3">Harga</th>
-                    <th className="px-4 py-3">Diskon</th>
-                    <th className="px-4 py-3">Fitur</th>
-                    <th className="px-4 py-3 text-right">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {listMobil.map((mobil) => (
-                    <tr
-                      key={mobil.id}
-                      className="hover:bg-gray-50/80 transition-colors group"
+
+            {/* ERROR */}
+            {pesanEror && (
+              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl flex items-start gap-3 text-sm">
+                <AlertCircle className="h-5 w-5 shrink-0 mt-0.5 text-red-500" />
+                <span>
+                  <span className="font-semibold">Koneksi Gagal:</span>{" "}
+                  {pesanEror}
+                </span>
+              </div>
+            )}
+
+            {/* Conditional tab content */}
+            {activeTab === "banner" ? (
+              <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+                <h2 className="text-base font-bold text-gray-900">
+                  Manajemen Banner
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Unggah banner dari file lokal; file akan diunggah ke bucket
+                  &apos;banners&apos; dan URL disimpan ke tabel.
+                </p>
+
+                <div className="mt-4">
+                  <label className="block text-xs font-semibold text-gray-500">
+                    Judul (opsional)
+                  </label>
+                  <input
+                    value={bannerJudul}
+                    onChange={(e) => setBannerJudul(e.target.value)}
+                    className="w-full mt-2 bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                  />
+
+                  <div className="mt-3">
+                    <label className="block text-xs font-semibold text-gray-500">
+                      Pilih file banner
+                    </label>
+                    <div
+                      onClick={() => bannerFileInputRef.current?.click()}
+                      className="mt-2 border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer"
                     >
-                      <td className="px-6 py-3.5">
-                        <div className="flex items-center gap-3">
-                          <div className="h-11 w-16 rounded-lg bg-gray-100 overflow-hidden shrink-0 border border-gray-200">
-                            {mobil.gambar_urls?.[0] ? (
-                              <img
-                                src={mobil.gambar_urls[0]}
-                                alt={mobil.nama}
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center">
-                                <ImageIcon className="h-5 w-5 text-gray-300" />
+                      <Upload className="h-6 w-6 text-gray-300 mx-auto mb-2" />
+                      <p className="text-sm text-gray-500">
+                        Klik untuk pilih file PNG/JPG/WEBP
+                      </p>
+                    </div>
+                    <input
+                      ref={bannerFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) {
+                          setLocalBannerFile(f);
+                          const r = new FileReader();
+                          r.onload = (ev) =>
+                            setPreviewBanner(
+                              (ev.target?.result as string) || null,
+                            );
+                          r.readAsDataURL(f);
+                        }
+                      }}
+                    />
+                    {previewBanner && (
+                      <div className="mt-3 rounded overflow-hidden border border-gray-200">
+                        <img
+                          src={previewBanner}
+                          alt="preview"
+                          className="w-full h-40 object-cover"
+                        />
+                      </div>
+                    )}
+
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        onClick={() => handleAddBanner()}
+                        className="bg-blue-600 text-white px-4 py-2 rounded"
+                      >
+                        Tambahkan Banner
+                      </button>
+                      <button
+                        onClick={() => {
+                          setPreviewBanner(null);
+                          setLocalBannerFile(null);
+                          setBannerJudul("");
+                        }}
+                        className="text-sm text-gray-500"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-6">
+                    <h3 className="text-sm font-semibold text-gray-700">
+                      Daftar Banner
+                    </h3>
+                    {loadingBanners ? (
+                      <p className="text-sm text-gray-400">Memuat…</p>
+                    ) : banners.length === 0 ? (
+                      <p className="text-sm text-gray-400">Belum ada banner</p>
+                    ) : (
+                      <div className="mt-3 space-y-3">
+                        {banners.map((b) => (
+                          <div
+                            key={b.id}
+                            className="flex items-center justify-between border border-gray-100 p-3 rounded-lg"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-28 h-14 bg-gray-100 overflow-hidden rounded-md">
+                                {b.gambar_url ? (
+                                  <img
+                                    src={b.gambar_url}
+                                    alt={b.judul || "banner"}
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">
+                                    No image
+                                  </div>
+                                )}
                               </div>
-                            )}
-                          </div>
-                          <div>
-                            <p className="font-semibold text-gray-900 text-sm">
-                              {mobil.nama}
-                            </p>
-                            {mobil.deskripsi && (
-                              <p className="text-xs text-gray-400 mt-0.5 max-w-[200px] truncate">
-                                {mobil.deskripsi}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <span className="inline-block bg-gray-100 text-gray-600 text-xs font-semibold px-2.5 py-1 rounded-md uppercase tracking-wide">
-                          {mobil.merek}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <span className="text-sm font-semibold text-gray-800">
-                          {formatRupiah(mobil.harga)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5">
-                        {mobil.diskon > 0 ? (
-                          <span className="inline-block bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold px-2 py-0.5 rounded-md">
-                            -{mobil.diskon}%
-                          </span>
-                        ) : (
-                          <span className="text-gray-300 text-sm">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        {mobil.fitur.length > 0 ? (
-                          <div className="flex flex-wrap gap-1 max-w-[180px]">
-                            {mobil.fitur.slice(0, 3).map((f) => (
-                              <span
-                                key={f}
-                                className="bg-blue-50 text-blue-600 text-[10px] font-medium px-1.5 py-0.5 rounded"
+                              <div>
+                                <p className="text-sm font-medium">
+                                  {b.judul || "-"}
+                                </p>
+                                <p className="text-xs text-gray-400">
+                                  {b.aktif ? "Aktif" : "Non-aktif"}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() =>
+                                  handleToggleBanner(b.id, b.aktif)
+                                }
+                                className="text-sm text-blue-600"
                               >
-                                {f}
-                              </span>
-                            ))}
-                            {mobil.fitur.length > 3 && (
-                              <span className="text-[10px] text-gray-400 font-medium">
-                                +{mobil.fitur.length - 3}
-                              </span>
-                            )}
+                                {b.aktif ? "Non-aktifkan" : "Aktifkan"}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteBanner(b.id)}
+                                className="text-sm text-red-600"
+                              >
+                                Hapus
+                              </button>
+                            </div>
                           </div>
-                        ) : (
-                          <span className="text-gray-300 text-sm">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => tanganiHapusMobil(mobil.id)}
-                          className="text-gray-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                          title="Hapus unit"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+            ) : (
+              // Mobil tab
+              <section className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-base font-bold text-gray-900">
+                      Daftar Unit Mobil
+                    </h2>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {listMobil.length} unit tercatat di inventaris
+                    </p>
+                  </div>
+                </div>
+
+                {loading ? (
+                  <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
+                    <Loader2 className="h-7 w-7 animate-spin text-blue-500" />
+                    <p className="text-sm">Memuat data inventaris…</p>
+                  </div>
+                ) : listMobil.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
+                    <Car className="h-10 w-10 text-gray-300" />
+                    <p className="text-sm font-medium">Belum ada unit mobil</p>
+                    <p className="text-xs text-gray-300">
+                      Klik Tambah Mobil untuk mulai mengisi inventaris
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-100 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                          <th className="px-6 py-3">Unit Mobil</th>
+                          <th className="px-4 py-3">Merek</th>
+                          <th className="px-4 py-3">Harga</th>
+                          <th className="px-4 py-3">Diskon</th>
+                          <th className="px-4 py-3">Fitur</th>
+                          <th className="px-4 py-3 text-right">Aksi</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {listMobil.map((mobil) => (
+                          <tr
+                            key={mobil.id}
+                            className="hover:bg-gray-50/80 transition-colors group"
+                          >
+                            <td className="px-6 py-3.5">
+                              <div className="flex items-center gap-3">
+                                <div className="h-11 w-16 rounded-lg bg-gray-100 overflow-hidden shrink-0 border border-gray-200">
+                                  {mobil.gambar_urls?.[0] ? (
+                                    <img
+                                      src={mobil.gambar_urls[0]}
+                                      alt={mobil.nama}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  ) : (
+                                    <div className="w-full h-full flex items-center justify-center">
+                                      <ImageIcon className="h-5 w-5 text-gray-300" />
+                                    </div>
+                                  )}
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-gray-900 text-sm">
+                                    {mobil.nama}
+                                  </p>
+                                  {mobil.deskripsi && (
+                                    <p className="text-xs text-gray-400 mt-0.5 max-w-[200px] truncate">
+                                      {mobil.deskripsi}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span className="inline-block bg-gray-100 text-gray-600 text-xs font-semibold px-2.5 py-1 rounded-md uppercase tracking-wide">
+                                {mobil.merek}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span className="text-sm font-semibold text-gray-800">
+                                {formatRupiah(mobil.harga)}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              {mobil.diskon > 0 ? (
+                                <span className="inline-block bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold px-2 py-0.5 rounded-md">
+                                  -{mobil.diskon}%
+                                </span>
+                              ) : (
+                                <span className="text-gray-300 text-sm">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              {mobil.fitur.length > 0 ? (
+                                <div className="flex flex-wrap gap-1 max-w-[180px]">
+                                  {mobil.fitur.slice(0, 3).map((f) => (
+                                    <span
+                                      key={f}
+                                      className="bg-blue-50 text-blue-600 text-[10px] font-medium px-1.5 py-0.5 rounded"
+                                    >
+                                      {f}
+                                    </span>
+                                  ))}
+                                  {mobil.fitur.length > 3 && (
+                                    <span className="text-[10px] text-gray-400 font-medium">
+                                      +{mobil.fitur.length - 3}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-gray-300 text-sm">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => tanganiHapusMobil(mobil.id)}
+                                className="text-gray-300 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                                title="Hapus unit"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            )}
+          </section>
         </div>
       </div>
 
-      {/* MODAL */}
+      {/* MODAL - dipindahkan ke luar dari struktur grid */}
       {modalTerbuka && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -565,7 +950,7 @@ export default function PanelAdminMobil() {
                     </div>
                     {harga && (
                       <p className="text-xs text-blue-500 font-medium">
-                        {formatRupiah(parseFloat(harga) || 0)}
+                        {formatRupiah(Number.parseFloat(harga) || 0)}
                       </p>
                     )}
                   </div>
@@ -642,6 +1027,20 @@ export default function PanelAdminMobil() {
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     Foto Mobil
                   </label>
+
+                  {/* Banner URL input */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                      URL Banner (opsional)
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="https://example.com/banner.jpg"
+                      value={bannerUrl}
+                      onChange={(e) => setBannerUrl(e.target.value)}
+                      className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                    />
+                  </div>
 
                   {/* Drag & Drop Area */}
                   <div
