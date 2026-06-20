@@ -2,28 +2,30 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
-  let response: NextResponse = NextResponse.next({
+  // 1. Buat respons awal
+  let response = NextResponse.next({
     request: {
       headers: request.headers,
     },
   });
 
-  const supabaseUrl: string = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const supabaseAnonKey: string =
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 
   if (!supabaseUrl || !supabaseAnonKey) {
     return response;
   }
 
-  // Inisialisasi SSR Client khusus middleware untuk membaca cookies browser
+  // 2. Inisialisasi SSR Client khusus middleware untuk membaca & menulis cookies browser
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       get(name: string) {
         return request.cookies.get(name)?.value;
       },
       set(name: string, value: string, options: CookieOptions) {
+        // Update cookie pada request agar server component di rute tujuan bisa membacanya
         request.cookies.set({ name, value, ...options });
+        // Buat ulang objek response untuk mengaplikasikan set-cookie ke browser
         response = NextResponse.next({
           request: { headers: request.headers },
         });
@@ -39,25 +41,33 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     },
   });
 
-  // Ambil sesi aktif saat ini
+  // =====================================================================
+  // PERBAIKAN UTAMA: Menggunakan getUser() bukan getSession() demi keamanan
+  // =====================================================================
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+  } = await supabase.auth.getUser();
+
   const { pathname } = request.nextUrl;
 
-  // Proteksi 1: Jika ke area /admin tapi belum login -> Tendang ke /masuk
-  if (pathname.startsWith("/admin") && !session) {
-    return NextResponse.redirect(new URL("/masuk", request.url));
+  // Proteksi 1: Jika mencoba masuk ke area /admin tapi belum login -> Tendang ke /masuk
+  if (pathname.startsWith("/admin") && !user) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/masuk";
+    return NextResponse.redirect(url);
   }
 
-  // Proteksi 2: Jika sudah login tapi coba buka /masuk atau /daftar -> Lempar ke dashboard admin
-  if (session && (pathname === "/masuk" || pathname === "/daftar")) {
-    return NextResponse.redirect(new URL("/admin/mobil", request.url));
+  // Proteksi 2: Jika sudah login tapi coba buka halaman /masuk atau /daftar -> Lempar langsung ke dashboard admin
+  if (user && (pathname === "/masuk" || pathname === "/daftar")) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/admin/mobil";
+    return NextResponse.redirect(url);
   }
 
   return response;
 }
 
+// Menentukan rute mana saja yang akan dilewati oleh filter middleware ini
 export const config = {
   matcher: ["/admin/:path*", "/masuk", "/daftar"],
 };
